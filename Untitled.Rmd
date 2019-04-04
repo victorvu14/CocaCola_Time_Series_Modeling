@@ -1,0 +1,451 @@
+---
+title: "Coca Cola Earnings"
+author: "Vikas Agarwal, Camille Blain-Collier, Giulio DeFelice, Nayla Fakhoury, Alejandro Koury, Federico Loguercio, Victor Vu"
+date: "2/18/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Time series analysis of coca cola quarterly earnings using a multiplicative SARIMA model
+
+```{r load, echo = FALSE}
+rm(list = ls())
+
+
+library(fBasics)
+library(forecast) 
+```
+
+
+
+```{r data import, echo=FALSE}
+df_raw <- read.csv('https://gist.githubusercontent.com/f-loguercio/30b5b55c139f602efea645cc6f4f302b/raw/f34fe9d8386eca3bf47f2e39c1eecc89745afe8d/coca_cola_earnings.csv', sep = ";", dec=",")
+
+df_raw$anntime <- as.Date(as.character(df_raw[['anntime']]), format = '%Y%m%d')
+
+y <- df_raw[,2]
+```
+
+
+```{r plots, echo = F}
+plot(df_raw$anntime, df_raw$value, type = "l", xlab = "time", ylab = "earnings", main = "Coca Cola Quarterly Earnings")
+```
+A clear yearly trend can be detected.
+
+```{r autocorrelation funcs, echo = F}
+nlags=96     # play with this parameter
+
+acf(y,nlags)
+```
+The sinusodial shape of the autocorrelation function is a strong indication for a seasonal trend underlying the data, with a high number of lags out of limits.
+
+```{r, echo = F}
+pacf(y,nlags) 
+```
+Plotting the PACF is extremely informative. Four lags out of order can be identified, 1, 3, 4 and 5. Interestingly, lag four is only on the brink. However,  the ACF clearly indicated the existence of a seasonal (yearly) trend.The explanation to this lies in the combination of a seasonal and non-seasonal trend. Their combination leads to partial autocorrelations of order 3 and 5.
+
+Formally test the need for differences
+Must seasonal differences be taken?
+
+```{r}
+s=4
+nsdiffs(y, m = s, test = c("ocsb"))  # seasonal differences?
+```
+The formal test suggests that one seasonal difference needs to be taken.
+
+Normal differences?
+
+```{r}
+ndiffs(y, alpha=0.05, test=c("adf")) # regular differences?
+```
+One normal difference must be taken.
+
+We will first take that suggested seasonal difference and then analyse the remaining structure in the data.
+
+```{r}
+fit1 <- arima(y,order=c(0,0,0),seasonal=list(order=c(0,1,0),period=s)) 
+fit1
+
+plot(fit1$residuals)
+```
+The data does not look stationary, variance appears to be increasing significantly as time proceeds.
+
+
+
+###Procedure:
+We will first proceed to estimate a model with this data and then compare the estimation performance with a model fit to the logarithmised data.
+
+
+
+Let's analyse the residuals in terms of autocorrelation:
+
+```{r, echo = F}
+acf(fit1$residuals, nlags)
+```
+
+```{r, echo = F}
+pacf(fit1$residuals,nlags)
+```
+
+Considerable structure can still be seen in the data.
+First looking at the multiples of the seasonal parameter, 4, the first lag (lag 4) in the PACF is out of limits, warranting an AR(1) term in the seasonal part. The structure in the ACF is unclear, there are no lags clearly indicating that an MA term should be added.
+Next, observing the small lags (below 4), lag 1 in the PACF is out of limits. The lags which are not multiples of 4 but bigger than 4 may be taken care of by the multiplicative effects of seasonal and non-seasonal AR-terms; we will not attempt to fit them yet.
+
+The residuals seem stationary in the mean, which is confirmed formally:
+```{r}
+ndiffs(fit1$residuals)
+```
+
+No regular differences are suggested by the formal test anymore.
+
+We will proceed by fitting a SARIMA model with both a seasonal and regular AR(1) term, with 1 seasonal difference.
+
+```{r}
+fit2 <- arima(y,order=c(1,0,0),seasonal=list(order=c(1,1,0),period=s)) 
+print(fit2)
+
+plot(fit2$residuals)
+```
+All estimated coefficients are highly significant.
+
+```{r, echo = F}
+acf(fit2$residuals, nlags)
+```
+```{r, echo = F}
+pacf(fit2$residuals, nlags)
+```
+
+While the residuals still do not look stationary in the variance, no remaining autocorrelation can be identified in the ACF and the PACF. The Box-Pierce test formally confirms this.
+
+```{r}
+Box.test(fit2$residuals, lag = 24)
+```
+
+
+
+###Proceed to estimating the logarithmized Time Series
+
+```{r}
+z = log(y)
+ts.plot(z)
+```
+Based on the plot, the logarithmised time series appears to have constant variance across time, in absolute values. 
+
+```{r, echo = F}
+nlags=96  
+
+acf(z,nlags)
+```
+
+```{r, echo = F}
+pacf(z,nlags)  
+```
+
+```{r}
+s=4
+nsdiffs(z, m = s, test = c("ocsb"))  # seasonal differences?
+```
+
+```{r}
+ndiffs(z, alpha=0.05, test=c("adf")) # regular differences?
+```
+The analysis up to this point is comparable with the non-transformed data; both a seasonal and a regular difference are formally suggested.
+
+```{r}
+fit_log_1 <- arima(z,order=c(0,0,0),seasonal=list(order=c(1,1,0),period=s)) 
+fit_log_1
+
+plot(fit_log_1$residuals)
+```
+After taking a seasonal difference, the residuals seem fairly stationary in both mean and variance, apart from one turbulent period, which also leads to slightly higher mean for the remaining time.
+
+```{r, echo = F}
+nlags=96 
+
+acf(fit_log_1$residuals,nlags)
+```
+
+```{r, echo = F}
+pacf(fit_log_1$residuals,nlags)
+```
+
+```{r}
+ndiffs(fit_log_1$residuals, alpha=0.05, test=c("adf")) 
+```
+```{r}
+Box.test(fit_log_1$residuals,lag=16)
+```
+Again, lag 4 out of limits in the PACF suggests an AR(1) term in the seasonal part. Looking at the smaller lags, 1 is clearly out of limits and 2 is on the edge.
+Regular differences are no longer necessary according to the formal test.
+
+We proceed by including the lags specified above.
+
+```{r}
+fit_log_2 <- arima(z,order=c(2,0,0),seasonal=list(order=c(1,1,0),period=s)) 
+fit_log_2
+
+plot(fit_log_2$residuals)
+```
+
+```{r, echo = F}
+acf(fit_log_2$residuals,nlags)
+```
+
+```{r, echo = F}
+pacf(fit_log_2$residuals,nlags)
+```
+```{r}
+Box.test(fit_log_2$residuals,lag=16)
+```
+While the null-hypothesis of no autocorrelation in the data is not rejected by the Box-Pierce test, the fifth lag still is out of limits, and so is the eigth. Thus, we proceed by including 5 AR terms in the non-seasonal part, and 2 in the seasonal part, and will compare the prediction performance of the several estimated models.
+
+```{r}
+fit_log_3 <- arima(z,order=c(5,0,0),seasonal=list(order=c(1,1,0),period=s)) 
+fit_log_3
+
+plot(fit_log_3$residuals)
+```
+
+```{r, echo = F}
+acf(fit_log_3$residuals,nlags)
+```
+```{r, echo = F}
+pacf(fit_log_3$residuals,nlags)
+```
+```{r}
+Box.test(fit_log_3$residuals,lag=16)
+```
+The eigth lag in the PACF stil being out of limits suggests that a second AR term in the seasonal part might be appropriate.
+
+```{r}
+fit_log_4 <- arima(z,order=c(5,0,0),seasonal=list(order=c(2,1,0),period=s)) 
+fit_log_4
+
+plot(fit_log_4$residuals)
+```
+
+```{r, echo = F}
+acf(fit_log_4$residuals,nlags)
+```
+```{r, echo = F}
+pacf(fit_log_4$residuals,nlags)
+```
+```{r}
+Box.test(fit_log_4$residuals,lag=16)
+```
+While this last model captures the data well, the SAR(1) coefficient has been insignificant throughout all models. Therefore, we will fit two more models, one SARIMA(5,0,0)x(0,1,0), and one SARIMA(8,0,0)x(0,1,0) in order to capture the eigth lag.
+
+
+```{r}
+fit_log_5 <- arima(z,order=c(5,0,0),seasonal=list(order=c(0,1,0),period=s)) 
+fit_log_5
+
+plot(fit_log_5$residuals)
+```
+
+```{r, echo = F}
+acf(fit_log_5$residuals,nlags)
+```
+```{r, echo = F}
+pacf(fit_log_5$residuals,nlags)
+```
+```{r}
+Box.test(fit_log_5$residuals,lag=16)
+```
+
+```{r}
+fit_log_6 <- arima(z,order=c(8,0,0),seasonal=list(order=c(0,1,0),period=s)) 
+fit_log_6
+
+plot(fit_log_6$residuals)
+```
+
+```{r, echo = F}
+acf(fit_log_6$residuals,nlags)
+```
+```{r, echo = F}
+pacf(fit_log_6$residuals,nlags)
+```
+```{r}
+Box.test(fit_log_6$residuals,lag=16)
+```
+Some further iterations were attempted, including moving average terms, which all yielded worse models though. fit_log_4 not only, as we will see, performs well in prediction, but also has all-significant coefficients (aparrt from the SAR(1) coefficient), unlike models including higher lags.
+
+
+
+###Estimation Error
+```{r}
+length(y)
+```
+
+For the original scale data:
+```{r}
+n.estimation <- 90 # 
+n.forecasting <- 17 # 
+horizontes<-4 # number of periods ahead
+
+predicc<-matrix(0,nrow=n.forecasting,ncol=horizontes)
+real<-matrix(0,nrow=n.forecasting,ncol=1)
+real<-y[(n.estimation+1):length(y)] 
+MSFE<-matrix(0,nrow=horizontes,ncol=1)
+MAPE<-matrix(0,nrow=horizontes,ncol=1)
+
+for (Periods_ahead in 1:horizontes) {
+  for (i in 1:n.forecasting) {
+    aux.y<-y[1:(n.estimation-Periods_ahead+i)];
+    fit <- arima(aux.y,order=c(1,0,0),seasonal=list(order=c(1,1,0),period=s));
+    y.pred<-predict(fit,n.ahead=Periods_ahead);
+    predicc[i,Periods_ahead]<- y.pred$pred[Periods_ahead];
+  }
+  error<-real-predicc[,Periods_ahead];
+  MSFE[Periods_ahead]<-mean(error^2);
+  MAPE[Periods_ahead]<-mean(abs(error/real)) *100;
+}
+```
+
+
+For the logarithmised data:
+```{r}
+n.estimation <- 90 # 
+n.forecasting <- 17 # 
+horizontes<-4 # number of periods ahead
+
+predicc<-matrix(0,nrow=n.forecasting,ncol=horizontes)
+real<-matrix(0,nrow=n.forecasting,ncol=1)
+real<-y[(n.estimation+1):length(y)] 
+MSFE_log_2<-matrix(0,nrow=horizontes,ncol=1)
+MAPE_log_2<-matrix(0,nrow=horizontes,ncol=1)
+
+for (Periods_ahead in 1:horizontes) {
+  for (i in 1:n.forecasting) {
+    aux.z<-z[1:(n.estimation-Periods_ahead+i)];
+    fit <- arima(aux.z,order=c(2,0,0),seasonal=list(order=c(1,1,0),period=s));
+    z.pred<-predict(fit,n.ahead=Periods_ahead);
+    predicc[i,Periods_ahead]<- z.pred$pred[Periods_ahead];
+  }
+  error<-real-exp(predicc[,Periods_ahead]);
+  MSFE_log_2[Periods_ahead]<-mean(error^2);
+  MAPE_log_2[Periods_ahead]<-mean(abs(error/real)) *100;
+}
+```
+
+```{r}
+n.estimation <- 90 # 
+n.forecasting <- 17 # 
+horizontes<-4 # number of periods ahead
+
+predicc<-matrix(0,nrow=n.forecasting,ncol=horizontes)
+real<-matrix(0,nrow=n.forecasting,ncol=1)
+real<-y[(n.estimation+1):length(y)] 
+MSFE_log_3<-matrix(0,nrow=horizontes,ncol=1)
+MAPE_log_3<-matrix(0,nrow=horizontes,ncol=1)
+
+for (Periods_ahead in 1:horizontes) {
+  for (i in 1:n.forecasting) {
+    aux.z<-z[1:(n.estimation-Periods_ahead+i)];
+    fit <- arima(aux.z,order=c(5,0,0),seasonal=list(order=c(1,1,0),period=s));
+    z.pred<-predict(fit,n.ahead=Periods_ahead);
+    predicc[i,Periods_ahead]<- z.pred$pred[Periods_ahead];
+  }
+  error<-real-exp(predicc[,Periods_ahead]);
+  MSFE_log_3[Periods_ahead]<-mean(error^2);
+  MAPE_log_3[Periods_ahead]<-mean(abs(error/real)) *100;
+}
+```
+
+```{r}
+n.estimation <- 90 # 
+n.forecasting <- 17 # 
+horizontes<-4 # number of periods ahead
+
+predicc<-matrix(0,nrow=n.forecasting,ncol=horizontes)
+real<-matrix(0,nrow=n.forecasting,ncol=1)
+real<-y[(n.estimation+1):length(y)] 
+MSFE_log_4<-matrix(0,nrow=horizontes,ncol=1)
+MAPE_log_4<-matrix(0,nrow=horizontes,ncol=1)
+
+for (Periods_ahead in 1:horizontes) {
+  for (i in 1:n.forecasting) {
+    aux.z<-z[1:(n.estimation-Periods_ahead+i)];
+    fit <- arima(aux.z,order=c(5,0,0),seasonal=list(order=c(2,1,0),period=s));
+    z.pred<-predict(fit,n.ahead=Periods_ahead);
+    predicc[i,Periods_ahead]<- z.pred$pred[Periods_ahead];
+  }
+  error<-real-exp(predicc[,Periods_ahead]);
+  MSFE_log_4[Periods_ahead]<-mean(error^2);
+  MAPE_log_4[Periods_ahead]<-mean(abs(error/real)) *100;
+}
+```
+
+```{r}
+n.estimation <- 90 # 
+n.forecasting <- 17 # 
+horizontes<-4 # number of periods ahead
+
+predicc<-matrix(0,nrow=n.forecasting,ncol=horizontes)
+real<-matrix(0,nrow=n.forecasting,ncol=1)
+real<-y[(n.estimation+1):length(y)] 
+MSFE_log_5<-matrix(0,nrow=horizontes,ncol=1)
+MAPE_log_5<-matrix(0,nrow=horizontes,ncol=1)
+
+for (Periods_ahead in 1:horizontes) {
+  for (i in 1:n.forecasting) {
+    aux.z<-z[1:(n.estimation-Periods_ahead+i)];
+    fit <- arima(aux.z,order=c(5,0,0),seasonal=list(order=c(0,1,0),period=s));
+    z.pred<-predict(fit,n.ahead=Periods_ahead);
+    predicc[i,Periods_ahead]<- z.pred$pred[Periods_ahead];
+  }
+  error<-real-exp(predicc[,Periods_ahead]);
+  MSFE_log_5[Periods_ahead]<-mean(error^2);
+  MAPE_log_5[Periods_ahead]<-mean(abs(error/real)) *100;
+}
+```
+
+```{r}
+n.estimation <- 90 # 
+n.forecasting <- 17 # 
+horizontes<-4 # number of periods ahead
+
+predicc<-matrix(0,nrow=n.forecasting,ncol=horizontes)
+real<-matrix(0,nrow=n.forecasting,ncol=1)
+real<-y[(n.estimation+1):length(y)] 
+MSFE_log_6<-matrix(0,nrow=horizontes,ncol=1)
+MAPE_log_6<-matrix(0,nrow=horizontes,ncol=1)
+
+for (Periods_ahead in 1:horizontes) {
+  for (i in 1:n.forecasting) {
+    aux.z<-z[1:(n.estimation-Periods_ahead+i)];
+    fit <- arima(aux.z,order=c(8,0,0),seasonal=list(order=c(0,1,0),period=s));
+    z.pred<-predict(fit,n.ahead=Periods_ahead);
+    predicc[i,Periods_ahead]<- z.pred$pred[Periods_ahead];
+  }
+  error<-real-exp(predicc[,Periods_ahead]);
+  MSFE_log_6[Periods_ahead]<-mean(error^2);
+  MAPE_log_6[Periods_ahead]<-mean(abs(error/real)) *100;
+}
+```
+
+
+###Overview of models:
+```{r, echo = F}
+print('SARIMA(1,0,0)x(1,1,0), MAPE 4 steps ahead')
+t(MAPE)
+print('SARIMA(2,0,0)x(1,1,0), MAPE 4 steps ahead')
+t(MAPE_log_2)
+print('SARIMA(5,0,0)x(1,1,0), MAPE 4 steps ahead')
+t(MAPE_log_3)
+print('SARIMA(5,0,0)x(2,1,0), MAPE 4 steps ahead')
+t(MAPE_log_4)
+print('SARIMA(5,0,0)x(0,1,0), MAPE 4 steps ahead')
+t(MAPE_log_5)
+print('SARIMA(8,0,0)x(0,1,0), MAPE 4 steps ahead')
+t(MAPE_log_6)
+```
+
+##Conclusion
+Taking the logarithm of the time series lead to considerably lower prediction errors. Of the models fit on the logarithmised data, a SARIMA(5,0,0)x(1,1,0) model seems to capture the data well. Adding a SAR(2) term improves the 4 steps ahead prediction accuracy, but slightly worsens the one step ahead prediction. When all SAR terms are removed, the model does indeed improve, at least in the shorter term. Increasing the number of AR terms to 8 slightly improves the 1 step ahead prediction, but considerably worsens the further ahead ones.
+
+Due to its simplicity together with good predictions, significant coefficients and white noise residuals, the SARIMA(5,0,0)x(0,1,0) model is chosen. It did not yield the best prediction of all models, in fact prediction errors further decrease when adding more AR terms, but given the size of the dataset, it is unclear how reliable these small differences in prediction error are.
